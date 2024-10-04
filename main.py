@@ -1,12 +1,47 @@
+import os
 import pygame
-from time import sleep
+import gymnasium as gym
+import numpy as np
 
 from env import CheckersEnv
+
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.evaluation import evaluate_policy
+
+
+def train():
+    env = CheckersEnv(render_mode="human")
+    env = DummyVecEnv([lambda:env])
+    model = PPO('MlpPolicy', env, verbose=1)
+    model.learn(total_timesteps=10)
+
+    model_file_name = 'ppo_model_checkers'
+    ppo_path = os.path.join('models', model_file_name)
+    model.save(ppo_path)
+
+    env.close()
+
+
+def evaluate():
+    model_file_name = 'ppo_model_checkers'
+    ppo_path = os.path.join('models', model_file_name)
+
+    env = CheckersEnv(render_mode="human")
+    env = DummyVecEnv([lambda:env])
+    model = PPO.load(ppo_path, env=env)
+
+    evaluate_policy(model, env, n_eval_episodes=10, render=True)
+
+    env.close()
 
 
 def test():
     env = CheckersEnv(render_mode="human")
     obs, info = env.reset()
+
+    print(obs)
+    print(env.action_space.sample())
 
     episodes = 5
     for episode in range(1, episodes+1):
@@ -29,34 +64,4 @@ def test():
 
 if __name__ == '__main__':
 
-    test()
-
-    '''
-    def register_input():
-        global quit
-        for event in pygame.event.get():
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    quit = True
-
-            if event.type == pygame.QUIT:
-                quit = True
-
-    env = CheckersEnv()
-    env.render()
-
-    quit = False
-    while not quit:
-        while True:
-            register_input()
-            if env.step() == True:
-                sleep(10)
-                quit = True
-            pygame.display.flip()
-
-            if quit:
-                break
-
-    pygame.display.quit()
-    pygame.quit()
-    '''
+    train()
