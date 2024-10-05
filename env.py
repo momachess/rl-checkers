@@ -41,7 +41,6 @@ class Board:
     def __init__(self):
         
         self.turn = 'black'
-        self.end_game = False
 
         self.white_pieces = 12
         self.black_pieces = 12
@@ -50,127 +49,149 @@ class Board:
         self._setup()
 
         self.moves = []
+        self.step_move = False
         self.jumps = []
+        self.step_jump = False
 
         self.invalid_moves = 0
 
     def step(self, row, col):
+        end_game = False
+        winner = None
+
+        reward = 0.0
+
+        # make white move
+        is_action_valid = False
+        if self.step_jump:
+            for (old_row, old_col, via_row, vial_col, new_row, new_col, _) in self.jumps:
+                if row == new_row and col == new_col:
+                    self._make_jump(old_row, old_col, via_row, vial_col, new_row, new_col)
+                    self.black_pieces -= 1
+                    self._promote(new_row, new_col)
+                    # todo: attach jump sequence (if present)
+                    is_action_valid = True
+                    reward += 2.0
+                    break
+        elif self.step_move:
+            for (old_row, old_col, new_row, new_col) in self.moves:
+                if row == new_row and col == new_col:
+                    self._make_move(old_row, old_col, new_row, new_col)
+                    self._promote(new_row, new_col)
+                    is_action_valid = True
+                    reward += 1.0
+                    break
+
+        self.step_jump = False
+        self.step_move = False
+
+        if is_action_valid == False:
+            reward = -0.1
+        else:        
+            # check end game
+            if self.black_pieces == 0:
+                end_game = True
+                winner = 'white'
+                reward = +100.0
+            if  self.invalid_moves == 2:
+                end_game = True
+                winner = 'black'
+                reward = -100.0
+
+            # make black move (if not end game)
+            if end_game == False:
+                self.turn = 'black'
+
+                self._find_valid_moves()
+                if self.jumps != []:
+                    sel = random.randint(0, len(self.jumps) - 1)
+                    self._make_jump(self.jumps[sel][0], self.jumps[sel][1], self.jumps[sel][2], self.jumps[sel][3], self.jumps[sel][4], self.jumps[sel][5])
+                    self.white_pieces -= 1
+                    while True:
+                        if sel < len(self.jumps) - 1:
+                            sel += 1
+                            if self.jumps[sel][6] == True:
+                                self._make_jump(self.jumps[sel][0], self.jumps[sel][1], self.jumps[sel][2], self.jumps[sel][3], self.jumps[sel][4], self.jumps[sel][5])
+                                self.white_pieces -= 1
+                            else:
+                                break
+                        else:
+                            break
+                    self._promote(self.jumps[sel][4], self.jumps[sel][5])
+                elif self.moves != []:
+                    sel = random.randint(0, len(self.moves)-1)
+                    self._make_move(self.moves[sel][0], self.moves[sel][1], self.moves[sel][2], self.moves[sel][3])
+                    self._promote(self.moves[sel][2], self.moves[sel][3])
+
+                # check end game
+                if self.white_pieces == 0:
+                    end_game = True
+                    winner = 'black'
+                    reward = -100.0
+                if self.moves == [] and self.jumps == []:
+                    end_game = True
+                    winner = 'white'
+                    reward = +100.0
+
+        # find white moves (if not end game)
+        board = [0 for _ in range(64)]
+        if end_game == False:
+            self.turn = 'white'
+
+            self._find_valid_moves()
+            if self.jumps != []:
+                self.step_jump = True
+                for (_, _, _, _, new_row, new_col, _) in self.jumps:
+                    board[new_row * BOARD_SIZE + new_col] = 1
+            elif self.moves != []:
+                self.step_move = True
+                for (_, _, new_row, new_col) in self.moves:
+                    board[new_row * BOARD_SIZE + new_col] = 1
+
+            if self.moves == [] and self.jumps == []:
+                end_game = True
+                winner = 'black'
+                reward = -100
+
+        return board, reward, end_game, winner
+
+    def reset(self):
         self.end_game = False
-        self.winner = None
 
-        # check if it could be a jump for white
-        self.jumps = []
-        if self._check_jump(row - 2, col - 2, row - 1, col - 1, row, col, 'white'):
-            if self.pieces[row - 2][col - 2].color == 'white':
-                row = row - 2
-                col = col - 2
-                if self.pieces[row][col].king:
-                    self._find_white_king_jumps(row, col, False)
-                else:
-                    self.jumps.append((row, col, row + 1, col + 1, row + 2, col + 2, False))
-        if self._check_jump(row - 2, col + 2, row - 1, col + 1, row, col, 'white'):
-            if self.pieces[row - 2][col + 2].color == 'white':
-                row = row - 2
-                col = col + 2
-                if self.pieces[row][col].king:
-                    self._find_white_king_jumps(row, col, False)
-                else:
-                    self.jumps.append((row, col, row + 1, col - 1, row + 2, col - 2, False))
-        if self._check_jump(row + 2, col - 2, row + 1, col - 1, row, col, 'white'):
-            if self.pieces[row + 2][col - 2].color == 'white' and self.pieces[row + 2][col - 2].king:
-                row = row + 2
-                col = col - 2
-                self._find_white_king_jumps(row, col, False)
-        if self._check_jump(row + 2, col + 2, row + 1, col + 1, row, col, 'white'):
-            if self.pieces[row + 2][col + 2].color == 'white' and self.pieces[row + 2][col - 2].king:
-                row = row + 2
-                col = col +2
-                self._find_white_king_jumps(row, col, False)
+        self.white_pieces = 12
+        self.black_pieces = 12
 
-        # check if it could be a move for white
-        self.moves = []
-        if self.jumps == []:
-            if self._check_move(row - 1, col - 1, row, col):
-                if self.pieces[row - 1][col - 1].color == 'white':
-                    self.moves.append((row - 1, col - 1, row, col))
-            if self._check_move(row - 1, col + 1, row, col):
-                if self.pieces[row - 1][col + 1].color == 'white':
-                    self.moves.append((row - 1, col + 1, row, col))
+        self.pieces = [[], [], [], [], [], [], [], []]
+        self._setup()
 
+        self.invalid_moves = 0
+
+        # make first game move
+        self.turn = 'black'
+        self._find_valid_moves()
         if self.jumps != []:
-            sel = 0
+            sel = random.randint(0, len(self.jumps) - 1)
             self._make_jump(self.jumps[sel][0], self.jumps[sel][1], self.jumps[sel][2], self.jumps[sel][3], self.jumps[sel][4], self.jumps[sel][5])
+            self.white_pieces -= 1
             while True:
                 if sel < len(self.jumps) - 1:
                     sel += 1
                     if self.jumps[sel][6] == True:
                         self._make_jump(self.jumps[sel][0], self.jumps[sel][1], self.jumps[sel][2], self.jumps[sel][3], self.jumps[sel][4], self.jumps[sel][5])
+                        self.white_pieces -= 1
                     else:
                         break
                 else:
                     break
-                self._promote(self.jumps[sel][4], self.jumps[sel][5])
-                self.black_pieces -= 1
+            self._promote(self.jumps[sel][4], self.jumps[sel][5])
         elif self.moves != []:
-            self._make_move(self.moves[0][0], self.moves[0][1], self.moves[0][2], self.moves[0][3])
-            self._promote(self.moves[0][2], self.moves[0][3])
+            sel = random.randint(0, len(self.moves)-1)
+            self._make_move(self.moves[sel][0], self.moves[sel][1], self.moves[sel][2], self.moves[sel][3])
+            self._promote(self.moves[sel][2], self.moves[sel][3])
 
-        # check end of game
-        if self.black_pieces == 0:
-            self.end_game = True
-            self.winner = 'white'
-        if  self.invalid_moves == 2:
-            self.end_game = True
-            self.winner = 'black'
-
-        if self.end_game == False:
-            self.turn == 'black'
-
-            self._find_valid_moves()
-            if self.jumps != []:
-                sel = random.randint(0, len(self.jumps) - 1)
-                self._make_jump(self.jumps[sel][0], self.jumps[sel][1], self.jumps[sel][2], self.jumps[sel][3], self.jumps[sel][4], self.jumps[sel][5])
-                while True:
-                    if sel < len(self.jumps) - 1:
-                        sel += 1
-                        if self.jumps[sel][6] == True:
-                            self._make_jump(self.jumps[sel][0], self.jumps[sel][1], self.jumps[sel][2], self.jumps[sel][3], self.jumps[sel][4], self.jumps[sel][5])
-                        else:
-                            break
-                    else:
-                        break
-                self._promote(self.jumps[sel][4], self.jumps[sel][5])
-                self.white_pieces -= 1
-            elif self.moves != []:
-                sel = random.randint(0, len(self.moves)-1)
-                self._make_move(self.moves[sel][0], self.moves[sel][1], self.moves[sel][2], self.moves[sel][3])
-                self._promote(self.moves[sel][2], self.moves[sel][3])
-
-            if self.white_pieces == 0:
-                self.end_game = True
-                self.winner = 'black'
-            if self.moves == [] and self.jumps == []:
-                self.end_game = True
-                self.winner = 'white'
-
-            self.turn = 'white'
-
-        return self.end_game, self.winner
-
-    def reset(self):
-        self.turn = 'black'
-        self.end_game = False
-
-        self.white_pieces = 12
-        self.black_pieces = 12
-
-        self.pieces = [[], [], [], [], [], [], [], []]
-        self._setup()
-
+        self.turn = 'white'
         self.moves = []
         self.jumps = []
-
-        self.invalid_moves = 0
 
     def render(self, surf):
         surf.fill(DARKBROWN)
@@ -321,6 +342,9 @@ class Board:
             self.moves.append((row, col, row + 1, col + 1))
 
     def _find_white_king_jumps(self, row, col, link):
+        for (_, _, _, _, new_row, new_col, _) in self.jumps:
+            if row == new_row and col == new_col:
+                return
         if self._check_jump(row, col, row - 1, col - 1, row - 2, col - 2, 'white'):
             self.jumps.append((row, col, row - 1, col - 1, row - 2, col - 2, link))
             self._find_white_king_jumps(row - 2, col - 2, True)
@@ -361,6 +385,9 @@ class Board:
             self.moves.append((row, col, row + 1, col + 1))
 
     def _find_black_king_jumps(self, row, col, link):
+        for (_, _, _, _, new_row, new_col, _) in self.jumps:
+            if row == new_row and col == new_col:
+                return
         if self._check_jump(row, col, row - 1, col - 1, row - 2, col - 2, 'black'):
             self.jumps.append((row, col, row - 1, col - 1, row - 2, col - 2, link))
             self._find_black_king_jumps(row - 2, col - 2, True)
@@ -398,12 +425,12 @@ class Board:
 
 
 class CheckersEnv(gym.Env):
-    metadata = {"render_modes": ["human"], "render_fps": 0.5}
+    metadata = {"render_modes": ["human"], "render_fps": 60}
 
     def __init__(self, render_mode: Optional[str] = None):
 
         self.action_space = gym.spaces.MultiDiscrete([7, 7])
-        self.observation_space = gym.spaces.Box(low=-1, high=1, shape=(64,), dtype="int32")
+        self.observation_space = gym.spaces.MultiDiscrete([2 for _ in range(64)])
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -417,31 +444,32 @@ class CheckersEnv(gym.Env):
 
         self.board = Board()
 
+        self.episodes = -1
+        self.steps = 0
+        self.reward = 0.0
+        self.score = -999.0
+
+        self.white_wins = 0
+        self.black_wins = 0
+
     def step(self, action):
 
-        terminated = False
-        reward = 0
+        row = int(action[0])
+        col = int(action[1])
 
-        row = action[0]
-        col = action[1]
+        state, reward, terminated, winner = self.board.step(row, col)
 
-        end_game, winner = self.board.step(row, col)
-
-        state = []
-        for row in range(BOARD_SIZE):
-                for col in range(BOARD_SIZE):
-                    if self.board[row][col].color == 'empty':
-                        state.append(0)
-                    elif self.board[row][col].color == 'white':
-                        state.append(1)
-                    else:
-                        state.append(-1)
-
-        if end_game:
-            terminated = True
+        if terminated == False:
+            self.steps += 1
+            if self.steps == 1024:
+                terminated = True
+        else:
             if winner == 'white':
-                reward = 1
+                self.white_wins += 1
+            else:
+                self.black_wins += 1
 
+        self.reward += reward
         self.render()
 
         return state, reward, terminated, False, {}
@@ -454,14 +482,13 @@ class CheckersEnv(gym.Env):
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
 
-        self.state = [ 0, -1,  0, -1,  0, -1,  0, -1, \
-                      -1,  0, -1,  0, -1,  0, -1,  0, \
-                       0, -1,  0, -1,  0, -1,  0, -1, \
-                       0,  0,  0,  0,  0,  0,  0,  0, \
-                       0,  0,  0,  0,  0,  0,  0,  0, \
-                       0,  1,  0,  1,  0,  1,  0,  1, \
-                       1,  0,  1,  0,  1,  0,  1,  0, \
-                       0,  1,  0,  1,  0,  1,  0,  1]
+        self.episodes += 1
+        self.steps = 0
+        if self.episodes > 0:
+            self.score = max(self.score, self.reward)
+        self.reward = 0.0
+
+        self.state = [0 for _ in range(64)]
 
         self.board.reset()
 
@@ -489,6 +516,38 @@ class CheckersEnv(gym.Env):
 
         self.board.render(surf_board)
         self.screen.blit(surf_board, (80, 80))
+        font = pygame.font.Font(pygame.font.get_default_font(), 12)
+        
+        text = font.render("Episodes: %04i" % self.episodes, True, LIGHTBROWN, DARKBROWN)
+        text_rect = text.get_rect()
+        text_rect.center = (64, 20)
+        surf_info.blit(text, text_rect)
+
+        text = font.render("Steps: %04i" % self.steps, True, LIGHTBROWN, DARKBROWN)
+        text_rect = text.get_rect()
+        text_rect.center = (160, 20)
+        surf_info.blit(text, text_rect)
+
+        text = font.render("Score: %04.1f" % self.score, True, LIGHTBROWN, DARKBROWN)
+        text_rect = text.get_rect()
+        text_rect.center = (256, 20)
+        surf_info.blit(text, text_rect)
+
+        text = font.render("Reward: %04.1f" % self.reward, True, LIGHTBROWN, DARKBROWN)
+        text_rect = text.get_rect()
+        text_rect.center = (352, 20)
+        surf_info.blit(text, text_rect)
+
+        text = font.render("White Win: %04i" % self.white_wins, True, LIGHTBROWN, DARKBROWN)
+        text_rect = text.get_rect()
+        text_rect.center = (448, 20)
+        surf_info.blit(text, text_rect)
+
+        text = font.render("Black Win: %04i" % self.black_wins, True, LIGHTBROWN, DARKBROWN)
+        text_rect = text.get_rect()
+        text_rect.center = (544, 20)
+        surf_info.blit(text, text_rect)
+
         self.screen.blit(surf_info, (80, 724))
 
         pygame.event.pump()

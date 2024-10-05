@@ -14,7 +14,7 @@ def train():
     env = CheckersEnv(render_mode="human")
     env = DummyVecEnv([lambda:env])
     model = PPO('MlpPolicy', env, verbose=1)
-    model.learn(total_timesteps=10)
+    model.learn(total_timesteps=20480)
 
     model_file_name = 'ppo_model_checkers'
     ppo_path = os.path.join('models', model_file_name)
