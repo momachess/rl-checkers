@@ -1,6 +1,7 @@
 import pygame
 import random
 
+import numpy as np
 import gymnasium as gym
 
 from typing import Optional
@@ -14,9 +15,13 @@ WHITE        = (255, 255, 255)
 BLACK        = (  0,   0,   0)
 LIGHTBROWN   = (200, 157, 124)
 DARKBROWN    = ( 78,  53,  36)
-HILIGHT_MOVE = (  0, 255,   0)
-HILIGHT_JUMP = (255,   0,   0)
+HILIGHT_MOVE = (  0, 255,   0, 128)
+HILIGHT_JUMP = (255,   0,   0, 128)
 KING         = (255, 255,   0)
+WHITE_PRE    = (192, 192, 192)
+BLACK_PRE    = (128, 128, 128)
+WHITE_VIA    = (  0, 255,   0)
+BLACK_VIA    = (  0,   0, 255)
 
 
 class Piece:
@@ -53,75 +58,131 @@ class Board:
         self.jumps = []
         self.step_jump = False
 
-        self.invalid_moves = 0
+        self.last_white_move = None
+        self.last_black_move = None
 
-    def step(self, row, col):
+    def step(self, action):
         end_game = False
         winner = None
 
+        self.last_white_move = None
+        self.last_black_move = None
+
         reward = 0.0
 
-        # make white move
-        is_action_valid = False
+        # action has 64 float evaluation values to be used to get the best move
+        best = [0.0, -1, -1, -1, -1]
         if self.step_jump:
-            for (old_row, old_col, via_row, vial_col, new_row, new_col, _) in self.jumps:
-                if row == new_row and col == new_col:
-                    self._make_jump(old_row, old_col, via_row, vial_col, new_row, new_col)
-                    self.black_pieces -= 1
-                    self._promote(new_row, new_col)
-                    # todo: attach jump sequence (if present)
-                    is_action_valid = True
-                    reward += 2.0
-                    break
+            if len(self.jumps) == 1:
+                (old_row, old_col, _, _, new_row, new_col, link) = self.jumps[0]
+                best[1] = old_row
+                best[2] = old_col
+                best[3] = new_row
+                best[4] = new_col
+                best[0] = action[new_row][new_col]
+            else:
+                for (old_row, old_col, _, _, new_row, new_col, link) in self.jumps:
+                    eval = action[new_row][new_col]
+                    if link == False and eval > 0.0 and eval >= best[0]:
+                        best[1] = old_row
+                        best[2] = old_col
+                        best[3] = new_row
+                        best[4] = new_col
+                        best[0] = eval
         elif self.step_move:
+            if len(self.moves) == 1:
+                (old_row, old_col, new_row, new_col) = self.moves[0]
+                best[1] = old_row
+                best[2] = old_col
+                best[3] = new_row
+                best[4] = new_col
+                best[0] = action[new_row][new_col]
+            else:
+                for (old_row, old_col, new_row, new_col) in self.moves:
+                    eval = action[new_row][new_col]
+                    if eval > 0.0 and eval >= best[0]:
+                        best[1] = old_row
+                        best[2] = old_col
+                        best[3] = new_row
+                        best[4] = new_col
+                        best[0] = eval
+
+        # make white move
+        if self.step_jump and best[1] != -1:
+            jump_done = False
+            promote_row = -1
+            promote_col = -1
+            for (old_row, old_col, via_row, via_col, new_row, new_col, link) in self.jumps:
+                if jump_done == False:
+                    if best[1] == old_row and best[2] == old_col and best[3] == new_row and best[4] == new_col:
+                        promote_row = new_row
+                        promote_col = new_col
+                        self._make_jump(old_row, old_col, via_row, via_col, new_row, new_col)
+                        self.black_pieces -= 1
+                        jump_done = True
+                        self.last_white_move = (old_col, old_row, via_col, via_row, new_col, new_row)
+                else:
+                    if link == True:
+                        promote_row = new_row
+                        promote_col = new_col
+                        self._make_jump(old_row, old_col, via_row, via_col, new_row, new_col)
+                        self.black_pieces -= 1
+                        self.last_white_move = (old_col, old_row, via_col, via_row, new_col, new_row)
+                    else:
+                        jump_done = False
+            self._promote(promote_row, promote_col)
+            reward += 2.0
+        elif self.moves != []:
             for (old_row, old_col, new_row, new_col) in self.moves:
-                if row == new_row and col == new_col:
+                if best[1] == old_row and best[2] == old_col and best[3] == new_row and best[4] == new_col:
                     self._make_move(old_row, old_col, new_row, new_col)
                     self._promote(new_row, new_col)
-                    is_action_valid = True
                     reward += 1.0
-                    break
+                    self.last_white_move = (old_col, old_row, -1, -1, new_col, new_row)
 
         self.step_jump = False
         self.step_move = False
 
-        if is_action_valid == False:
-            reward = -0.1
-        else:        
-            # check end game
+        if best[1] != -1:
             if self.black_pieces == 0:
                 end_game = True
                 winner = 'white'
                 reward = +100.0
-            if  self.invalid_moves == 2:
-                end_game = True
-                winner = 'black'
-                reward = -100.0
 
             # make black move (if not end game)
-            if end_game == False:
+            if self.end_game == False:
                 self.turn = 'black'
 
                 self._find_valid_moves()
                 if self.jumps != []:
-                    sel = random.randint(0, len(self.jumps) - 1)
+                    sel = -1
+                    while True:
+                        sel = random.randint(0, len(self.jumps) - 1)
+                        if self.jumps[sel][6] == False:
+                            break
+                    assert sel != -1
                     self._make_jump(self.jumps[sel][0], self.jumps[sel][1], self.jumps[sel][2], self.jumps[sel][3], self.jumps[sel][4], self.jumps[sel][5])
                     self.white_pieces -= 1
+                    self.last_black_move = (self.jumps[sel][1], self.jumps[sel][0], self.jumps[sel][3], self.jumps[sel][2], self.jumps[sel][5], self.jumps[sel][4])
                     while True:
                         if sel < len(self.jumps) - 1:
                             sel += 1
                             if self.jumps[sel][6] == True:
                                 self._make_jump(self.jumps[sel][0], self.jumps[sel][1], self.jumps[sel][2], self.jumps[sel][3], self.jumps[sel][4], self.jumps[sel][5])
                                 self.white_pieces -= 1
+                                self.last_black_move = (self.jumps[sel][1], self.jumps[sel][0], self.jumps[sel][3], self.jumps[sel][2], self.jumps[sel][5], self.jumps[sel][4])
                             else:
                                 break
                         else:
                             break
                     self._promote(self.jumps[sel][4], self.jumps[sel][5])
+                    reward -= 2
                 elif self.moves != []:
                     sel = random.randint(0, len(self.moves)-1)
                     self._make_move(self.moves[sel][0], self.moves[sel][1], self.moves[sel][2], self.moves[sel][3])
                     self._promote(self.moves[sel][2], self.moves[sel][3])
+                    reward -= 1
+                    self.last_black_move = (self.moves[sel][1], self.moves[sel][0], -1, -1, self.moves[sel][3], self.moves[sel][2])
 
                 # check end game
                 if self.white_pieces == 0:
@@ -133,27 +194,45 @@ class Board:
                     winner = 'white'
                     reward = +100.0
 
-        # find white moves (if not end game)
-        board = [0 for _ in range(64)]
+        # fill state (observations)
+        state = [[[0 for _ in range(8)] for _ in range(8)] for _ in range(4)]
         if end_game == False:
             self.turn = 'white'
+
+            # first observation layer is white positions
+            for row in range(BOARD_SIZE):
+                for col in range(BOARD_SIZE):
+                    if self.pieces[row][col].color == 'white':
+                        state[0][row][col] = 1
+
+            # first observation layer is black positions
+            for row in range(BOARD_SIZE):
+                for col in range(BOARD_SIZE):
+                    if self.pieces[row][col].color == 'black':
+                        state[1][row][col] = 1
+
+            # third observation layer is empty positions
+            for row in range(BOARD_SIZE):
+                for col in range(BOARD_SIZE):
+                    if self.pieces[row][col].color == 'empty':
+                        state[2][row][col] = 1
 
             self._find_valid_moves()
             if self.jumps != []:
                 self.step_jump = True
                 for (_, _, _, _, new_row, new_col, _) in self.jumps:
-                    board[new_row * BOARD_SIZE + new_col] = 1
+                    state[3][new_row][new_col] = 1
             elif self.moves != []:
                 self.step_move = True
                 for (_, _, new_row, new_col) in self.moves:
-                    board[new_row * BOARD_SIZE + new_col] = 1
+                    state[3][new_row][new_col] = 1
 
             if self.moves == [] and self.jumps == []:
                 end_game = True
                 winner = 'black'
                 reward = -100
 
-        return board, reward, end_game, winner
+        return state, reward, end_game, winner
 
     def reset(self):
         self.end_game = False
@@ -163,8 +242,6 @@ class Board:
 
         self.pieces = [[], [], [], [], [], [], [], []]
         self._setup()
-
-        self.invalid_moves = 0
 
         # make first game move
         self.turn = 'black'
@@ -189,9 +266,44 @@ class Board:
             self._make_move(self.moves[sel][0], self.moves[sel][1], self.moves[sel][2], self.moves[sel][3])
             self._promote(self.moves[sel][2], self.moves[sel][3])
 
-        self.turn = 'white'
         self.moves = []
+        self.step_move = False
         self.jumps = []
+        self.step_jump = False
+
+        # fill state (observations)
+        state = [[[0 for _ in range(8)] for _ in range(8)] for _ in range(4)]
+        self.turn = 'white'
+
+        # first observation layer is white positions
+        for row in range(BOARD_SIZE):
+            for col in range(BOARD_SIZE):
+                if self.pieces[row][col].color == 'white':
+                    state[0][row][col] = 1
+
+        # first observation layer is black positions
+        for row in range(BOARD_SIZE):
+            for col in range(BOARD_SIZE):
+                if self.pieces[row][col].color == 'black':
+                    state[1][row][col] = 1
+
+        # third observation layer is empty positions
+        for row in range(BOARD_SIZE):
+            for col in range(BOARD_SIZE):
+                if self.pieces[row][col].color == 'empty':
+                    state[2][row][col] = 1
+
+        self._find_valid_moves()
+        if self.jumps != []:
+            self.step_jump = True
+            for (_, _, _, _, new_row, new_col, _) in self.jumps:
+                state[3][new_row][new_col] = 1
+        elif self.moves != []:
+            self.step_move = True
+            for (_, _, new_row, new_col) in self.moves:
+                state[3][new_row][new_col] = 1
+
+        return state
 
     def render(self, surf):
         surf.fill(DARKBROWN)
@@ -208,10 +320,35 @@ class Board:
             for col in range(BOARD_SIZE):
                 row[col].render(surf)
 
+        if self.last_white_move is not None:
+            if self.last_white_move[2] == -1:
+                pygame.draw.circle(surf, WHITE_PRE, [self.last_white_move[0]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_white_move[1]*SQUARE_SIZE + SQUARE_SIZE // 2], PIECE_SIZE)
+                pygame.draw.line(surf, WHITE, [self.last_white_move[0]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_white_move[1]*SQUARE_SIZE + SQUARE_SIZE // 2], [self.last_white_move[4]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_white_move[5]*SQUARE_SIZE + SQUARE_SIZE // 2])
+            else:
+                pygame.draw.circle(surf, WHITE_PRE, [self.last_white_move[0]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_white_move[1]*SQUARE_SIZE + SQUARE_SIZE // 2], PIECE_SIZE)
+                pygame.draw.circle(surf, WHITE_VIA, [self.last_white_move[2]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_white_move[3]*SQUARE_SIZE + SQUARE_SIZE // 2], PIECE_SIZE)
+                pygame.draw.line(surf, WHITE, [self.last_white_move[0]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_white_move[1]*SQUARE_SIZE + SQUARE_SIZE // 2], [self.last_white_move[2]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_white_move[3]*SQUARE_SIZE + SQUARE_SIZE // 2])
+                pygame.draw.line(surf, WHITE, [self.last_white_move[2]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_white_move[3]*SQUARE_SIZE + SQUARE_SIZE // 2], [self.last_white_move[4]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_white_move[5]*SQUARE_SIZE + SQUARE_SIZE // 2])
+
+        if self.last_black_move is not None:
+            if self.last_black_move[2] == -1:
+                pygame.draw.circle(surf, BLACK_PRE, [self.last_black_move[0]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_black_move[1]*SQUARE_SIZE + SQUARE_SIZE // 2], PIECE_SIZE)
+                pygame.draw.line(surf, BLACK, [self.last_black_move[0]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_black_move[1]*SQUARE_SIZE + SQUARE_SIZE // 2], [self.last_black_move[4]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_black_move[5]*SQUARE_SIZE + SQUARE_SIZE // 2])
+            else:
+                pygame.draw.circle(surf, BLACK_PRE, [self.last_black_move[0]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_black_move[1]*SQUARE_SIZE + SQUARE_SIZE // 2], PIECE_SIZE)
+                pygame.draw.circle(surf, BLACK_VIA, [self.last_black_move[2]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_black_move[3]*SQUARE_SIZE + SQUARE_SIZE // 2], PIECE_SIZE)
+                pygame.draw.line(surf, BLACK, [self.last_black_move[0]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_black_move[1]*SQUARE_SIZE + SQUARE_SIZE // 2], [self.last_black_move[2]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_black_move[3]*SQUARE_SIZE + SQUARE_SIZE // 2])
+                pygame.draw.line(surf, BLACK, [self.last_black_move[2]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_black_move[3]*SQUARE_SIZE + SQUARE_SIZE // 2], [self.last_black_move[4]*SQUARE_SIZE + SQUARE_SIZE // 2, self.last_black_move[5]*SQUARE_SIZE + SQUARE_SIZE // 2])
+
     def update(self):
         self._find_valid_moves()
         if self.jumps != []:
-            sel = random.randint(0, len(self.jumps) - 1)
+            sel = -1
+            while True:
+                sel = random.randint(0, len(self.jumps) - 1)
+                if self.jumps[sel][6] == False:
+                    break
+            assert sel != -1
             self._make_jump(self.jumps[sel][0], self.jumps[sel][1], self.jumps[sel][2], self.jumps[sel][3], self.jumps[sel][4], self.jumps[sel][5])
             while True:
                 if sel < len(self.jumps) - 1:
@@ -425,15 +562,16 @@ class Board:
 
 
 class CheckersEnv(gym.Env):
-    metadata = {"render_modes": ["human"], "render_fps": 60}
+    metadata = {"render_modes": ["human"] }
 
-    def __init__(self, render_mode: Optional[str] = None):
+    def __init__(self, render_mode: Optional[str] = None, render_fps: Optional[int] = 60):
 
-        self.action_space = gym.spaces.MultiDiscrete([7, 7])
-        self.observation_space = gym.spaces.MultiDiscrete([2 for _ in range(64)])
+        self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=0, high=1, shape=(4, BOARD_SIZE, BOARD_SIZE), dtype=np.uint8)
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
+        self.render_fps = render_fps
 
         # rendering components
 
@@ -454,10 +592,7 @@ class CheckersEnv(gym.Env):
 
     def step(self, action):
 
-        row = int(action[0])
-        col = int(action[1])
-
-        state, reward, terminated, winner = self.board.step(row, col)
+        state, reward, terminated, winner = self.board.step(action)
 
         if terminated == False:
             self.steps += 1
@@ -466,7 +601,7 @@ class CheckersEnv(gym.Env):
         else:
             if winner == 'white':
                 self.white_wins += 1
-            else:
+            elif winner == 'black':
                 self.black_wins += 1
 
         self.reward += reward
@@ -488,13 +623,11 @@ class CheckersEnv(gym.Env):
             self.score = max(self.score, self.reward)
         self.reward = 0.0
 
-        self.state = [0 for _ in range(64)]
-
-        self.board.reset()
+        state = self.board.reset()
 
         self.render()
 
-        return self.state, {}
+        return state, {}
 
     def render(self):
         if self.render_mode == "human":
@@ -553,4 +686,4 @@ class CheckersEnv(gym.Env):
         pygame.event.pump()
         pygame.display.update()
 
-        self.clock.tick(self.metadata["render_fps"])
+        self.clock.tick(self.render_fps)
